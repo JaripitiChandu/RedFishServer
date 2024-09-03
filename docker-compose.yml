@@ -1,0 +1,84 @@
+# Copyright Notice:
+# Copyright 2016-2024 DMTF. All rights reserved.
+# License: BSD 3-Clause License. For full text see link: https://github.com/DMTF/python-redfish-library/blob/main/LICENSE.md
+
+---
+version: "3.7"
+
+services:
+
+  bmc:
+    image: docker.io/dmtf/redfish-mockup-server:latest
+    networks:
+      - dmtf
+
+  test-curl-nossl:
+    image: docker.io/curlimages/curl:8.5.0
+    depends_on:
+      bmc:
+        condition: service_healthy
+    networks:
+      - dmtf
+    command: ["--fail", "-i", "-H", "Accept:application/yang-data+json", "http://bmc:8000/redfish/v1/Managers"]
+
+  test-utils-nossl:
+    image: docker.io/dmtf/redfish-tacklebox:latest
+    depends_on:
+      bmc:
+        condition: service_healthy
+    networks:
+      - dmtf
+    command: ["rf_manager_config.py", "--user", "root", "--password", "123", "--rhost", "http://bmc:8000"]
+
+  setup-cert:
+    image: docker.io/dmtf/redfish-mockup-server:latest
+    volumes:
+      - certs:/certs
+    user: "0"
+    entrypoint: /bin/bash
+    command: >
+      -c '
+        set -e
+        openssl req -x509 -nodes -newkey rsa:2048 -keyout key.pem -out cert.pem -sha256 -days 365 \
+          -subj "/C=GB/ST=London/L=London/O=Alros/OU=IT Department/CN=localhost"
+        cp key.pem cert.pem /certs
+        echo "Certificates created succcessfully."
+      '
+
+  bmc-ssl:
+    image: docker.io/dmtf/redfish-mockup-server:latest
+    depends_on:
+      setup-cert:
+        condition: service_completed_successfully
+    networks:
+      - dmtf
+    volumes:
+      - certs:/certs
+    command:
+      --ssl --key /certs/key.pem --cert /certs/cert.pem --port 9000
+    healthcheck:
+      test: curl --insecure --fail https://localhost:9000/redfish/
+
+  test-curl-ssl:
+    image: docker.io/curlimages/curl:8.5.0
+    depends_on:
+      bmc-ssl:
+        condition: service_healthy
+    networks:
+      - dmtf
+    command: ["--fail", "--insecure", "-i", "-H", "Accept:application/yang-data+json", "https://bmc-ssl:9000/redfish/v1/Managers"]
+
+  test-utils-ssl:
+    image: docker.io/dmtf/redfish-tacklebox:latest
+    depends_on:
+      bmc:
+        condition: service_healthy
+    networks:
+      - dmtf
+    command: ["rf_manager_config.py", "--user", "root", "--password", "123", "--rhost", "https://bmc-ssl:9000"]
+
+networks:
+  dmtf:
+
+volumes:
+  certs:
